@@ -4,8 +4,9 @@ if((DEFINED ENV{BRANCH}) AND (DEFINED ENV{BUILD_VERSION}) AND (DEFINED ENV{COMMI
         # If BRANCH is "master" and BUILD_VERSION is not empty, then we are building a master branch
         MESSAGE("Got from CI master branch and version $ENV{BUILD_VERSION}")
         set(PROJECT_VERSION $ENV{BUILD_VERSION})
+        set(CMAKE_PROJECT_VERSION ${PROJECT_VERSION})  # cpack will use this to set the binary versions
     elseif((DEFINED ENV{BRANCH}) AND (DEFINED ENV{COMMIT}))
-        # If BRANCH is set but not BUILD_VERSION we are building nightly, we gather only the commit hash
+        # If BRANCH is set but not BUILD_VERSION we are building a PR, we gather only the commit hash
         MESSAGE("Got from CI $ENV{BRANCH} branch and commit $ENV{COMMIT}")
         set(PROJECT_VERSION ${PROJECT_VERSION}.$ENV{COMMIT})
     endif()
@@ -14,12 +15,11 @@ if((DEFINED ENV{BRANCH}) AND (DEFINED ENV{BUILD_VERSION}) AND (DEFINED ENV{COMMI
 else()
     find_package(Git)
     if(GIT_EXECUTABLE)
-        MESSAGE("${CMAKE_CURRENT_SOURCE_DIR}")
-        get_filename_component(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR} DIRECTORY)
+        MESSAGE("${CMAKE_SOURCE_DIR}")
+        get_filename_component(SRC_DIR "${CMAKE_SOURCE_DIR}" DIRECTORY)
         #Get current Branch
         execute_process(
                 COMMAND ${GIT_EXECUTABLE} rev-parse --abbrev-ref HEAD
-                #WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
                 OUTPUT_VARIABLE GIT_DESCRIBE_BRANCH
                 RESULT_VARIABLE GIT_DESCRIBE_ERROR_CODE
                 OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -27,7 +27,6 @@ else()
         # Gather current commit
         execute_process(
                 COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
-                #WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
                 OUTPUT_VARIABLE GIT_DESCRIBE_VERSION
                 RESULT_VARIABLE GIT_DESCRIBE_ERROR_CODE
                 OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -35,7 +34,6 @@ else()
         # Check if Dirty
         execute_process(
                 COMMAND ${GIT_EXECUTABLE} diff --quiet --exit-code
-                #WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
                 RESULT_VARIABLE GIT_IS_DIRTY
                 OUTPUT_STRIP_TRAILING_WHITESPACE
         )
@@ -54,5 +52,36 @@ else()
         endif()
     else()
         MESSAGE(WARNING ": Git not found, cannot find git version")
+    endif()
+endif()
+
+# set date variables
+set(PROJECT_YEAR "1990")
+set(PROJECT_MONTH "01")
+set(PROJECT_DAY "01")
+
+# Extract year, month, and day
+if(PROJECT_VERSION MATCHES "^([0-9]{4})[.]([0-9]{3,4})")
+    # First capture group is the year
+    set(PROJECT_YEAR "${CMAKE_MATCH_1}")
+
+    # Second capture group is month/day
+    set(MONTH_DAY "${CMAKE_MATCH_2}")
+    string(LENGTH "${MONTH_DAY}" MONTH_DAY_LENGTH)
+    if(MONTH_DAY_LENGTH EQUAL 3)
+        string(SUBSTRING "${MONTH_DAY}" 0 1 PROJECT_MONTH)
+        string(SUBSTRING "${MONTH_DAY}" 1 2 PROJECT_DAY)
+    elseif(MONTH_DAY_LENGTH EQUAL 4)
+        string(SUBSTRING "${MONTH_DAY}" 0 2 PROJECT_MONTH)
+        string(SUBSTRING "${MONTH_DAY}" 2 2 PROJECT_DAY)
+    endif()
+
+    # Ensure month is two digits
+    if(PROJECT_MONTH LESS 10 AND NOT PROJECT_MONTH MATCHES "^0")
+        set(PROJECT_MONTH "0${PROJECT_MONTH}")
+    endif()
+    # Ensure day is two digits
+    if(PROJECT_DAY LESS 10 AND NOT PROJECT_DAY MATCHES "^0")
+        set(PROJECT_DAY "0${PROJECT_DAY}")
     endif()
 endif()
