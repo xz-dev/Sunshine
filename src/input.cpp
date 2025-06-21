@@ -779,7 +779,7 @@ namespace input {
    * @param input The input context pointer.
    * @param packet The scroll packet.
    */
-void passthrough(std::shared_ptr<input_t> &input, PNV_SCROLL_PACKET packet) {
+   void passthrough(std::shared_ptr<input_t> &input, PNV_SCROLL_PACKET packet) {
   if (!config::input.mouse) {
     return;
   }
@@ -787,71 +787,24 @@ void passthrough(std::shared_ptr<input_t> &input, PNV_SCROLL_PACKET packet) {
   // 获取滚动值
   int scrollValue = util::endian::big(packet->scrollAmt1);
   
-  // 静止阈值 - 忽略非常小的移动
-  const int SCROLL_THRESHOLD = 5;
-  
-  if (config::input.high_resolution_scrolling) {
-    // ===== 高分辨率模式修复 =====
-    
-    // 记录上次滚动时间
-    static auto last_scroll_time = std::chrono::steady_clock::now();
-    static int last_direction = 0;
-    
-    // 步骤1：忽略太小的值
-    if (abs(scrollValue) < SCROLL_THRESHOLD) {
-      return; // 直接忽略微小滚动
-    }
-    
-    // 步骤2：确定方向
-    int current_direction = (scrollValue > 0) ? 1 : -1;
-    
-    // 步骤3：防抖和方向变化检测
-    auto now = std::chrono::steady_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    now - last_scroll_time).count();
-    
-    // 如果方向改变或已经过了一段时间，发送"停止"信号
-    if ((current_direction != last_direction && last_direction != 0) || 
-        elapsed > 200) {
-      // 发送一个很小的反方向滚动，帮助Windows重置状态
-      platf::scroll(platf_input, -current_direction);
-      
-      // 等待小段时间确保处理
-      Sleep(5);
-    }
-    
-    // 步骤4：规范化滚动值，避免太小或太大
-    int normalized_value = current_direction * 
-                          std::min(std::max(abs(scrollValue), WHEEL_DELTA/2), 
-                                  WHEEL_DELTA*2);
-    
-    // 步骤5：发送规范化后的滚动
-    platf::scroll(platf_input, normalized_value);
-    
-    // 更新状态
-    last_scroll_time = now;
-    last_direction = current_direction;
-  } else {
-    // ===== 普通模式的四舍五入逻辑 =====
-    
-    // 加上新值
-    input->accumulated_vscroll_delta += scrollValue;
-    
-    // 判断正负
-    int direction = (input->accumulated_vscroll_delta > 0) ? 1 : 
-                   (input->accumulated_vscroll_delta < 0) ? -1 : 0;
-    
-    // 取绝对值
-    int absValue = abs(input->accumulated_vscroll_delta);
-    
-    // 四舍五入处理
-    if (absValue >= WHEEL_DELTA / 2) {
-      platf::scroll(platf_input, direction * WHEEL_DELTA);
-      input->accumulated_vscroll_delta = 0;
-    } else {
-      input->accumulated_vscroll_delta = 0; // 同样清除小值
-    }
+  // 如果值为零，直接返回
+  if (scrollValue == 0) {
+    return;
   }
+  
+  // 简单方向检测
+  int direction = (scrollValue > 0) ? 1 : -1;
+  
+  // ===== 统一处理逻辑（不区分高分辨率与否） =====
+  
+  // 1. 值标准化 - 确保值不会太小，直接使用完整WHEEL_DELTA
+  int normalizedValue = direction * WHEEL_DELTA;
+  
+  // 2. 直接发送标准化值
+  platf::scroll(platf_input, normalizedValue);
+  
+  // 3. 不保留任何状态
+  input->accumulated_vscroll_delta = 0;
 }
 
   /**
