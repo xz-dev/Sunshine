@@ -779,7 +779,7 @@ namespace input {
    * @param input The input context pointer.
    * @param packet The scroll packet.
    */
-   void passthrough(std::shared_ptr<input_t> &input, PNV_SCROLL_PACKET packet) {
+void passthrough(std::shared_ptr<input_t> &input, PNV_SCROLL_PACKET packet) {
   if (!config::input.mouse) {
     return;
   }
@@ -787,24 +787,31 @@ namespace input {
   // 获取滚动值
   int scrollValue = util::endian::big(packet->scrollAmt1);
   
-  // 如果值为零，直接返回
-  if (scrollValue == 0) {
+  // 忽略零值
+  if (scrollValue == 0) return;
+  
+  // 方向判断
+  int direction = (scrollValue > 0) ? 1 : -1;
+  
+  // 频率限制 - 防止过于频繁的滚动事件
+  static auto last_scroll_time = std::chrono::steady_clock::now();
+  auto now = std::chrono::steady_clock::now();
+  auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                 now - last_scroll_time).count();
+                 
+  // 限制最小间隔为80ms (更自然的滚动频率)
+  if (elapsed < 80) {
     return;
   }
   
-  // 简单方向检测
-  int direction = (scrollValue > 0) ? 1 : -1;
+  // 简化处理：发送标准化值
+  platf::scroll(platf_input, direction * WHEEL_DELTA);
   
-  // ===== 统一处理逻辑（不区分高分辨率与否） =====
-  
-  // 1. 值标准化 - 确保值不会太小，直接使用完整WHEEL_DELTA
-  int normalizedValue = direction * WHEEL_DELTA;
-  
-  // 2. 直接发送标准化值
-  platf::scroll(platf_input, normalizedValue);
-  
-  // 3. 不保留任何状态
+  // 清除累积值
   input->accumulated_vscroll_delta = 0;
+  
+  // 更新时间戳
+  last_scroll_time = now;
 }
 
   /**
