@@ -779,79 +779,125 @@ namespace input {
    * @param input The input context pointer.
    * @param packet The scroll packet.
    */
-void passthrough(std::shared_ptr<input_t> &input, PNV_SCROLL_PACKET packet) {
+   void passthrough(std::shared_ptr<input_t> &input, PNV_SCROLL_PACKET packet) {
   if (!config::input.mouse) {
     return;
   }
 
-  // 获取滚动值
+  // 关键参数
+  static std::atomic<bool> scrolling_active = false;  // 防止并发问题
+  static int last_direction = 0;
+  static auto last_scroll_time = std::chrono::steady_clock::now();
+  static int consecutive_scrolls = 0;  // 跟踪连续滚动次数
+  static std::thread* reset_thread = nullptr;  // 重置线程
+  
+  // 原子操作：确保一次只处理一个滚轮事件
+  if (scrolling_active.exchange(true)) {
+    return;  // 已有滚轮事件处理中，忽略此次
+  }
+  
+  // 获取和处理滚动值
   int scrollValue = util::endian::big(packet->scrollAmt1);
+  int current_direction = (scrollValue > 0) ? 1 : (scrollValue < 0) ? -1 : 0;
   
-  // 静止阈值 - 忽略非常小的移动
-  const int SCROLL_THRESHOLD = 5;
+  // 忽略零值
+  if (current_direction == 0) {
+    scrolling_active = false;
+    return;
+  }
   
-  if (config::input.high_resolution_scrolling) {
-    // ===== 高分辨率模式修复 =====
-    
-    // 记录上次滚动时间
-    static auto last_scroll_time = std::chrono::steady_clock::now();
-    static int last_direction = 0;
-    
-    // 步骤1：忽略太小的值
-    if (abs(scrollValue) < SCROLL_THRESHOLD) {
-      return; // 直接忽略微小滚动
-    }
-    
-    // 步骤2：确定方向
-    int current_direction = (scrollValue > 0) ? 1 : -1;
-    
-    // 步骤3：防抖和方向变化检测
+  // 处理滚轮事件（高分辨率或标准模式）
+  try {
     auto now = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    now - last_scroll_time).count();
+                   now - last_scroll_time).count();
     
-    // 如果方向改变或已经过了一段时间，发送"停止"信号
-    if ((current_direction != last_direction && last_direction != 0) || 
-        elapsed > 200) {
-      // 发送一个很小的反方向滚动，帮助Windows重置状态
-      platf::scroll(platf_input, -current_direction);
-      
-      // 等待小段时间确保处理
-      Sleep(5);
+    // 1. 方向改变检测与处理
+    if (last_direction != 0 && current_direction != last_direction) {
+      // 方向改变：强制发送反向停止信号
+      platf::scroll(platf_input, -last_direction * (WHEEL_DELTA/4));
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));  // 短暂等待处理
+      consecutive_scrolls = 0;  // 重置连续计数
+    } 
+    // 2. 超时检测
+    else if (elapsed > 300) {
+      // 长时间无活动：可能是之前的滚动没有正确结束
+      if (last_direction != 0) {
+        platf::scroll(platf_input, -last_direction * (WHEEL_DELTA/4));
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      consecutive_scrolls = 0;
+    }
+    // 3. 连续滚动限制
+    else {
+      consecutive_scrolls++;
+      if (consecutive_scrolls > 10) {
+        // 连续滚动过多：强制发送停止信号
+        platf::scroll(platf_input, -current_direction * (WHEEL_DELTA/4));
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        consecutive_scrolls = 0;
+      }
     }
     
-    // 步骤4：规范化滚动值，避免太小或太大
-    int normalized_value = current_direction * 
-                          std::min(std::max(abs(scrollValue), WHEEL_DELTA/2), 
-                                  WHEEL_DELTA*2);
+    // 4. 标准化滚动值
+    int normalized_value;
+    if (config::input.high_resolution_scrolling) {
+      // 高分辨率模式：规范化但保持相对精度
+      normalized_value = current_direction * 
+          std::min(std::max(abs(scrollValue), WHEEL_DELTA/2), WHEEL_DELTA);
+    } else {
+      // 标准模式：使用四舍五入到WHEEL_DELTA
+      input->accumulated_vscroll_delta += scrollValue;
+      int abs_acc = abs(input->accumulated_vscroll_delta);
+      
+      if (abs_acc >= WHEEL_DELTA / 2) {
+        normalized_value = (input->accumulated_vscroll_delta > 0 ? 1 : -1) * WHEEL_DELTA;
+        input->accumulated_vscroll_delta = 0;
+      } else {
+        // 值太小，当前不处理，但也不保留
+        input->accumulated_vscroll_delta = 0;
+        scrolling_active = false;
+        return;
+      }
+    }
     
-    // 步骤5：发送规范化后的滚动
+    // 5. 发送规范化的滚动事件
     platf::scroll(platf_input, normalized_value);
     
-    // 更新状态
-    last_scroll_time = now;
-    last_direction = current_direction;
-  } else {
-    // ===== 普通模式的四舍五入逻辑 =====
-    
-    // 加上新值
-    input->accumulated_vscroll_delta += scrollValue;
-    
-    // 判断正负
-    int direction = (input->accumulated_vscroll_delta > 0) ? 1 : 
-                   (input->accumulated_vscroll_delta < 0) ? -1 : 0;
-    
-    // 取绝对值
-    int absValue = abs(input->accumulated_vscroll_delta);
-    
-    // 四舍五入处理
-    if (absValue >= WHEEL_DELTA / 2) {
-      platf::scroll(platf_input, direction * WHEEL_DELTA);
-      input->accumulated_vscroll_delta = 0;
-    } else {
-      input->accumulated_vscroll_delta = 0; // 同样清除小值
+    // 6. 设置自动重置线程
+    if (reset_thread != nullptr) {
+      if (reset_thread->joinable()) {
+        reset_thread->join();
+      }
+      delete reset_thread;
     }
+    
+    reset_thread = new std::thread([current_direction]() {
+      // 等待100ms
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      
+      // 发送两个递减的微小反向滚动
+      for (int i = 2; i > 0; i--) {
+        platf::scroll(platf_input, -current_direction * (WHEEL_DELTA/16) * i);
+        std::this_thread::sleep_for(std::chrono::milliseconds(15));
+      }
+      
+      // 发送零滚动值（如果API支持）
+      platf::scroll(platf_input, 0);
+    });
+    reset_thread->detach();
+    
+    // 更新状态
+    last_direction = current_direction;
+    last_scroll_time = now;
   }
+  catch (const std::exception& e) {
+    // 异常处理
+    BOOST_LOG(error) << "滚轮处理异常: " << e.what();
+  }
+  
+  // 完成处理，允许下一个事件
+  scrolling_active = false;
 }
 
   /**
